@@ -1,0 +1,9 @@
+praw
+beautifulsoup4
+vaderSentiment
+spacy
+pandas
+numpy
+streamlit
+plotly
+python-dotenv
