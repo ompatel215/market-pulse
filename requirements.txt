@@ -1,9 +1,6 @@
-praw
-beautifulsoup4
+requests
 vaderSentiment
-spacy
 pandas
 numpy
 streamlit
 plotly
-python-dotenv
