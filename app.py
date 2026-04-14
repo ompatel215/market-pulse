@@ -4,14 +4,14 @@ import pandas as pd
 import numpy as np
 import sys
 sys.path.append(".")
-from src.scraper import scrape_subreddit
+from src.scraper import scrape_subreddit, scrape_twitter
 from src.processor import process_posts
 from src.analyzer import analyze_posts, summarize
 
 st.set_page_config(page_title="Market Pulse", layout="wide")
 
 st.title("Market Pulse")
-st.caption("Real-time Reddit sentiment tracker for market volatility detection")
+st.caption("Real-time Reddit & Twitter sentiment tracker for market volatility detection")
 
 # ticker input
 col1, col2 = st.columns([3, 1])
@@ -28,12 +28,28 @@ SUBREDDITS = ["wallstreetbets", "investing", "stocks"]
 @st.cache_data(show_spinner=False)
 def fetch_and_analyze(ticker_upper):
     all_posts = []
+    
+    # Fetch Reddit data
     for sub in SUBREDDITS:
-        all_posts.extend(scrape_subreddit(sub, limit=50))
+        try:
+            all_posts.extend(scrape_subreddit(sub, limit=50))
+        except Exception:
+            continue
+            
+    # Fetch Twitter data
+    twitter_query = f"${ticker_upper} lang:en min_faves:10 -is:retweet"
+    twitter_data = scrape_twitter(twitter_query, limit=50)
+    all_posts.extend(twitter_data)
+    
+    if not all_posts:
+        return pd.DataFrame(), {}
+
     df = process_posts(all_posts)
     df = df[df["tickers"].apply(lambda t: ticker_upper in t)]
+    
     if df.empty:
         return df, {}
+    
     df = analyze_posts(df)
     stats = summarize(df)
     return df, stats
@@ -44,7 +60,7 @@ if fetch and not ticker:
 
 if fetch and ticker:
     ticker_upper = ticker.upper()
-    with st.spinner(f"Scraping Reddit for {ticker_upper}..."):
+    with st.spinner(f"Scraping social media for {ticker_upper}..."):
         df, stats = fetch_and_analyze(ticker_upper)
 
     if df.empty:
