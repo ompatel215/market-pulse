@@ -1,40 +1,11 @@
-import snscrape.modules.twitter as sntwitter
 import logging
 
 def scrape_twitter(query: str, limit: int = 100) -> list[dict]:
     """
-    Scrapes tweets based on a query using snscrape.
-    Returns a list of dictionaries compatible with the existing pipeline.
+    Twitter/X scraping via snscrape is no longer functional as of 2023
+    (Twitter revoked the underlying API access snscrape relied on).
+    This stub returns an empty list so the rest of the pipeline works cleanly.
+    Sentiment analysis runs on Reddit data only.
     """
-    tweets = []
-    try:
-        scraper = sntwitter.TwitterSearchScraper(query)
-        for i, tweet in enumerate(scraper.get_items()):
-            if i >= limit:
-                break
-            
-            # Construct dictionary with requested keys and compatibility keys for processor.py
-            tweets.append({
-                # Requested keys
-                "source": "twitter",
-                "content": tweet.content,
-                "date": tweet.date,
-                "likes": tweet.likeCount,
-                "retweets": tweet.retweetCount,
-                "username": tweet.user.username,
-                
-                # Compatibility keys for processor.py
-                "id": str(tweet.id),
-                "title": "",
-                "body": tweet.content,
-                "score": tweet.likeCount,
-                "num_comments": tweet.retweetCount,
-                "created_utc": tweet.date.timestamp(),
-                "subreddit": f"t/{tweet.user.username}"
-            })
-    except Exception as e:
-        logging.error(f"Error scraping Twitter: {e}")
-        # Return empty list on failure to avoid crashing the app
-        return []
-        
-    return tweets
+    logging.info("Twitter scraping disabled — API access revoked. Using Reddit only.")
+    return []
