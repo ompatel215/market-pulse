@@ -6,9 +6,9 @@ import pandas as pd
 import sys
 
 sys.path.append(".")
-from src.scraper import scrape_subreddit, scrape_twitter
+from src.scraper import scrape_subreddit, scrape_twitter, scrape_google_news, scrape_stocktwits
 from src.processor import process_posts
-from src.analyzer import analyze_posts, summarize, sentiment_over_time, extract_topics
+from src.analyzer import analyze_posts, summarize, sentiment_over_time, extract_topics, vader_accuracy, _format_source
 from src.stock import fetch_stock_prices
 
 # ── Page config ────────────────────────────────────────────────────────────────
@@ -65,49 +65,74 @@ with col3:
 
 st.divider()
 
-SUBREDDITS = ["wallstreetbets", "investing", "stocks", "StockMarket", "options"]
+SUBREDDITS = [
+    "wallstreetbets", "investing", "stocks", "StockMarket", "options",
+    "Superstonk", "pennystocks", "Daytrading", "ValueInvesting", "SecurityAnalysis",
+]
 PERIOD_REDDIT_LIMIT = {"1wk": 25, "1mo": 50, "3mo": 100}
 
 
 # ── Data fetching (cached) ─────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=600)
 def fetch_and_analyze(ticker_upper: str, period: str):
-    all_posts = []
+    import os
+    ticker_df = pd.DataFrame()
 
-    for sub in SUBREDDITS:
-        for category in ["hot", "new"]:
-            try:
-                posts = scrape_subreddit(
-                    sub,
-                    limit=PERIOD_REDDIT_LIMIT.get(period, 50),
-                    category=category,
+    # ── Load pre-scraped CSV first (fast + reliable for demo) ─
+    csv_path = "data/dataset.csv"
+    if os.path.exists(csv_path):
+        cached = pd.read_csv(csv_path)
+        if "query_ticker" in cached.columns:
+            ticker_df = cached[cached["query_ticker"] == ticker_upper].copy()
+            if not ticker_df.empty and isinstance(ticker_df["tickers"].iloc[0], str):
+                ticker_df["tickers"] = ticker_df["tickers"].apply(
+                    lambda x: eval(x) if isinstance(x, str) else x
                 )
-                all_posts.extend(posts)
-            except Exception:
-                continue
 
-    # Twitter stub — returns [] gracefully
-    all_posts.extend(scrape_twitter(f"${ticker_upper}", limit=50))
+    # ── Fall back to live scraping if ticker not in CSV ───────
+    if ticker_df.empty:
+        all_posts = []
+        for sub in SUBREDDITS:
+            for category in ["hot"]:
+                try:
+                    posts = scrape_subreddit(
+                        sub,
+                        limit=PERIOD_REDDIT_LIMIT.get(period, 50),
+                        category=category,
+                    )
+                    all_posts.extend(posts)
+                except Exception:
+                    continue
 
-    if not all_posts:
-        return pd.DataFrame(), {}, pd.DataFrame(), pd.DataFrame(), []
+        all_posts.extend(scrape_twitter(f"${ticker_upper}", limit=50))
+        all_posts.extend(scrape_google_news(ticker_upper, limit=75))
+        all_posts.extend(scrape_stocktwits(ticker_upper, limit=30))
 
-    df = process_posts(all_posts)
-    # Deduplicate by id
-    df = df.drop_duplicates(subset=["id"])
+        if not all_posts:
+            return pd.DataFrame(), {}, pd.DataFrame(), pd.DataFrame(), [], {}
 
-    ticker_df = df[df["tickers"].apply(lambda t: ticker_upper in t)]
+        df = process_posts(all_posts)
+        df = df.drop_duplicates(subset=["id"])
+        ticker_df = df[df["tickers"].apply(lambda t: ticker_upper in t)].copy()
 
     if ticker_df.empty:
-        return ticker_df, {}, pd.DataFrame(), pd.DataFrame(), []
+        return ticker_df, {}, pd.DataFrame(), pd.DataFrame(), [], {}
 
-    ticker_df = analyze_posts(ticker_df)
+    # Sentiment + date (CSV already has these; live scrape doesn't yet)
+    if "sentiment" not in ticker_df.columns:
+        ticker_df = analyze_posts(ticker_df)
+    if "date" not in ticker_df.columns:
+        ticker_df["date"] = pd.to_datetime(
+            ticker_df["created_utc"], unit="s", utc=True
+        ).dt.tz_localize(None).dt.normalize()
+
     stats = summarize(ticker_df)
     time_df = sentiment_over_time(ticker_df)
     stock_df = fetch_stock_prices(ticker_upper, period=period)
     topics = extract_topics(ticker_df)
+    accuracy = vader_accuracy(ticker_df)
 
-    return ticker_df, stats, time_df, stock_df, topics
+    return ticker_df, stats, time_df, stock_df, topics, accuracy
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -117,8 +142,8 @@ if fetch and not ticker:
 elif fetch and ticker:
     ticker_upper = ticker.strip().upper()
 
-    with st.spinner(f"Scraping Reddit & fetching {ticker_upper} data…"):
-        df, stats, time_df, stock_df, topics = fetch_and_analyze(ticker_upper, period)
+    with st.spinner(f"Scraping Reddit, Stocktwits & news for {ticker_upper}…"):
+        df, stats, time_df, stock_df, topics, accuracy = fetch_and_analyze(ticker_upper, period)
 
     if df.empty:
         st.info(
@@ -142,6 +167,16 @@ elif fetch and ticker:
         k3.metric("Bullish", stats["bullish"])
         k4.metric("Bearish", stats["bearish"])
         k5.metric("Most Active", stats["top_subreddit"])
+
+        # VADER accuracy row (only if Stocktwits labels available)
+        if accuracy:
+            st.caption(
+                f"🎯 VADER accuracy vs. Stocktwits user labels: "
+                f"**{accuracy['accuracy']*100:.1f}%** "
+                f"({accuracy['correct']}/{accuracy['evaluated']} directional calls correct) · "
+                f"Bullish recall {accuracy['bullish_recall']*100:.0f}% · "
+                f"Bearish recall {accuracy['bearish_recall']*100:.0f}%"
+            )
 
         st.divider()
 
@@ -253,20 +288,22 @@ elif fetch and ticker:
             st.plotly_chart(fig2, use_container_width=True)
 
         with ch2:
-            st.subheader("Avg Sentiment by Subreddit")
+            st.subheader("Avg Sentiment by Source")
             sub_avg = (
                 df.groupby("subreddit")["sentiment"]
                 .agg(["mean", "count"])
                 .reset_index()
                 .rename(columns={"mean": "sentiment", "count": "posts"})
-                .sort_values("sentiment", ascending=True)
             )
+            # Format labels cleanly (r/wsb, Google News, Stocktwits)
+            sub_avg["label"] = sub_avg["subreddit"].apply(_format_source)
+            sub_avg = sub_avg.sort_values("sentiment", ascending=True)
             colors = ["#10b981" if v >= 0.05 else "#ef4444" if v < -0.05 else "#94a3b8"
                       for v in sub_avg["sentiment"]]
             fig3 = go.Figure()
             fig3.add_trace(go.Bar(
                 x=sub_avg["sentiment"],
-                y=sub_avg["subreddit"],
+                y=sub_avg["label"],
                 orientation="h",
                 marker_color=colors,
                 text=sub_avg["posts"].apply(lambda n: f"{n} posts"),

@@ -1,5 +1,6 @@
 import re
 import pandas as pd
+import html as html_lib
 
 STOPWORDS = {
     "A", "I", "AM", "PM", "CEO", "CFO", "CTO", "IPO", "ETF", "ATH", "ATL",
@@ -14,6 +15,8 @@ SPECIAL_CHARS_PATTERN = re.compile(r'[^a-zA-Z0-9\s\$]')
 
 
 def clean_text(text: str) -> str:
+    # Decode HTML entities first (&amp; &quot; &#39; etc.)
+    text = html_lib.unescape(text)
     text = URL_PATTERN.sub("", text)
     text = SPECIAL_CHARS_PATTERN.sub(" ", text)
     text = re.sub(r'\s+', " ", text).strip()
@@ -22,10 +25,8 @@ def clean_text(text: str) -> str:
 
 def extract_tickers(text: str) -> list[str]:
     dollar_tickers = {t for t in DOLLAR_TICKER_PATTERN.findall(text) if t not in STOPWORDS}
-
     if dollar_tickers:
         return list(dollar_tickers)
-
     bare_tickers = {t for t in BARE_TICKER_PATTERN.findall(text) if t not in STOPWORDS}
     return list(bare_tickers)
 
@@ -35,9 +36,9 @@ def process_posts(posts: list[dict]) -> pd.DataFrame:
     for post in posts:
         combined = f"{post.get('title', '')} {post.get('body', '')}".strip()
         cleaned = clean_text(combined)
-        tickers = extract_tickers(combined) 
+        tickers = extract_tickers(combined)
 
-        records.append({
+        record = {
             "id": post["id"],
             "text": cleaned,
             "tickers": tickers,
@@ -45,6 +46,13 @@ def process_posts(posts: list[dict]) -> pd.DataFrame:
             "num_comments": post["num_comments"],
             "created_utc": post["created_utc"],
             "subreddit": post["subreddit"],
-        })
+        }
+        # Carry through optional fields
+        if "st_sentiment" in post:
+            record["st_sentiment"] = post["st_sentiment"]
+        if "source" in post:
+            record["source"] = post["source"]
+
+        records.append(record)
 
     return pd.DataFrame(records)
