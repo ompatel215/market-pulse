@@ -4,4 +4,6 @@ pandas
 numpy
 streamlit
 plotly
-snscrape
+scikit-learn
+yfinance
+python-dotenv

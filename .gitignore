@@ -32,3 +32,6 @@ data/processed/*.csv
 .idea/
 .project
 .pydevproject
+
+# Claude Code
+.claude/
